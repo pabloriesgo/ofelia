@@ -41,6 +41,15 @@ const removeSaveGuard = router.beforeEach(async () => {
 })
 onUnmounted(removeSaveGuard)
 
+// Closing or reloading the tab skips the router guard: send the edit and ask before leaving.
+useEventListener(window, 'beforeunload', (event: BeforeUnloadEvent) => {
+  if (!notesStore.hasUnsavedChanges()) return
+  notesStore.saveOnUnload()
+  event.preventDefault()
+  // Older browsers only show the prompt when returnValue is set.
+  event.returnValue = ''
+})
+
 function onNavigate(target: string) {
   refreshToday()
   router.push(noteRoute(target))

@@ -93,6 +93,22 @@ export const useNotesStore = defineStore('notes', () => {
     saveError.value = null
   }
 
+  /** True while an edit is waiting to be saved or its save is still in flight. */
+  function hasUnsavedChanges(): boolean {
+    return pendingSave !== null || saving.value
+  }
+
+  /**
+   * Fires the pending edit as a keepalive request so it can still reach the
+   * backend after the tab closes. The edit stays pending in case the user
+   * cancels leaving; saving it twice is harmless.
+   */
+  function saveOnUnload() {
+    if (!pendingSave) return
+    // Browsers reject keepalive bodies over 64 KB; the leave prompt still guards that edit.
+    upsertNote(pendingSave.date, pendingSave.content, { keepalive: true }).catch(() => {})
+  }
+
   return {
     currentNote,
     loading,
@@ -103,5 +119,7 @@ export const useNotesStore = defineStore('notes', () => {
     updateContent,
     flushPendingSave,
     discardPendingSave,
+    hasUnsavedChanges,
+    saveOnUnload,
   }
 })
