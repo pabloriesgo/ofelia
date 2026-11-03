@@ -274,4 +274,127 @@ describe('useNotesStore', () => {
       expect(store.currentNote).toEqual({ date: '2026-09-24', content: 'tomorrow', createdAt: null, updatedAt: null })
     })
   })
+
+  describe('saveOnUnload', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+      vi.mocked(getNote).mockResolvedValue({
+        data: { date: '2026-09-23', content: '', createdAt: null, updatedAt: null },
+      })
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('reports no unsaved changes once the edit is saved', async () => {
+      vi.mocked(upsertNote).mockImplementation(async (date: string, content: string) => ({
+        data: { date, content, createdAt: 'x', updatedAt: 'x' },
+      }))
+      const store = useNotesStore()
+      await store.fetchNote('2026-09-23')
+
+      store.updateContent('typed')
+      expect(store.hasUnsavedChanges()).toBe(true)
+
+      await vi.runAllTimersAsync()
+      expect(store.hasUnsavedChanges()).toBe(false)
+    })
+
+    it('reports unsaved changes while a save is in flight', async () => {
+      vi.mocked(upsertNote).mockReturnValue(new Promise(() => {}))
+      const store = useNotesStore()
+      await store.fetchNote('2026-09-23')
+
+      store.updateContent('typed')
+      await vi.runAllTimersAsync()
+
+      expect(store.hasUnsavedChanges()).toBe(true)
+    })
+
+    it('sends the pending edit as a keepalive request and keeps it pending while in flight', async () => {
+      vi.mocked(upsertNote).mockImplementation(async (date: string, content: string) => ({
+        data: { date, content, createdAt: 'x', updatedAt: 'x' },
+      }))
+      const store = useNotesStore()
+      await store.fetchNote('2026-09-23')
+
+      store.updateContent('typed')
+      store.saveOnUnload()
+
+      expect(upsertNote).toHaveBeenCalledWith('2026-09-23', 'typed', { keepalive: true })
+      expect(store.hasUnsavedChanges()).toBe(true)
+    })
+
+    it('resends an edit whose save is in flight when nothing else is pending', async () => {
+      vi.mocked(upsertNote).mockReturnValue(new Promise(() => {}))
+      const store = useNotesStore()
+      await store.fetchNote('2026-09-23')
+
+      store.updateContent('typed')
+      await vi.runAllTimersAsync()
+      store.saveOnUnload()
+
+      expect(upsertNote).toHaveBeenLastCalledWith('2026-09-23', 'typed', { keepalive: true })
+    })
+
+    it('clears a failed edit and its error once the keepalive request succeeds', async () => {
+      vi.mocked(upsertNote).mockRejectedValueOnce(new Error('network error'))
+      const store = useNotesStore()
+      await store.fetchNote('2026-09-23')
+
+      store.updateContent('typed')
+      await vi.runAllTimersAsync()
+      expect(store.saveError).not.toBeNull()
+
+      vi.mocked(upsertNote).mockImplementation(async (date: string, content: string) => ({
+        data: { date, content, createdAt: 'x', updatedAt: 'x' },
+      }))
+      store.saveOnUnload()
+      await flushPromises()
+
+      expect(store.hasUnsavedChanges()).toBe(false)
+      expect(store.saveError).toBeNull()
+    })
+
+    it('keeps a newer edit pending when an older keepalive request succeeds', async () => {
+      let resolveKeepalive!: () => void
+      vi.mocked(upsertNote).mockReturnValueOnce(
+        new Promise((resolve) => {
+          resolveKeepalive = () => resolve({ data: { date: '2026-09-23', content: 'typed', createdAt: 'x', updatedAt: 'x' } })
+        }),
+      )
+      const store = useNotesStore()
+      await store.fetchNote('2026-09-23')
+
+      store.updateContent('typed')
+      store.saveOnUnload()
+      store.updateContent('typed more')
+      resolveKeepalive()
+      await flushPromises()
+
+      expect(store.hasUnsavedChanges()).toBe(true)
+    })
+
+    it('does nothing when there is no pending edit', async () => {
+      const store = useNotesStore()
+      await store.fetchNote('2026-09-23')
+
+      store.saveOnUnload()
+
+      expect(upsertNote).not.toHaveBeenCalled()
+    })
+
+    it('swallows a failed keepalive request', async () => {
+      vi.mocked(upsertNote).mockRejectedValue(new TypeError('body too large for keepalive'))
+      const store = useNotesStore()
+      await store.fetchNote('2026-09-23')
+
+      store.updateContent('typed')
+      store.saveOnUnload()
+      await flushPromises()
+
+      expect(store.hasUnsavedChanges()).toBe(true)
+    })
+  })
 })

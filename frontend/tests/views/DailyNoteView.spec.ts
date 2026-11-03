@@ -236,6 +236,36 @@ describe('DailyNoteView', () => {
       expect(upsertNote).toHaveBeenCalledTimes(1)
       confirm.mockRestore()
     })
+
+    it('asks before closing the tab and sends the unsaved edit', async () => {
+      vi.mocked(upsertNote).mockImplementation(async (date: string, content: string) => ({
+        data: { date, content, createdAt: 'x', updatedAt: 'x' },
+      }))
+      const { wrapper } = await mountAt('/day/2026-09-20')
+      await wrapper.find('textarea').setValue('Draft')
+
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+
+      expect(event.defaultPrevented).toBe(true)
+      expect(upsertNote).toHaveBeenCalledWith('2026-09-20', 'Draft', { keepalive: true })
+    })
+
+    it('lets the tab close without asking when everything is saved', async () => {
+      vi.mocked(upsertNote).mockImplementation(async (date: string, content: string) => ({
+        data: { date, content, createdAt: 'x', updatedAt: 'x' },
+      }))
+      const { wrapper } = await mountAt('/day/2026-09-20')
+      await wrapper.find('textarea').setValue('Draft')
+      await vi.runAllTimersAsync()
+      await flushPromises()
+
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+
+      expect(event.defaultPrevented).toBe(false)
+      expect(upsertNote).toHaveBeenCalledTimes(1)
+    })
   })
 
   describe('when the day changes while the app is open', () => {

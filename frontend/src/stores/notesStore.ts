@@ -15,6 +15,8 @@ export const useNotesStore = defineStore('notes', () => {
 
   let latestRequestedDate: string | null = null
   let pendingSave: { date: string; content: string } | null = null
+  // The edit whose save request is running, so it can be resent if the tab closes mid-request.
+  let inFlightSave: { date: string; content: string } | null = null
   // Saves run one at a time so an older PUT can never land after a newer one.
   let saveQueue: Promise<boolean> = Promise.resolve(true)
 
@@ -39,6 +41,7 @@ export const useNotesStore = defineStore('notes', () => {
     if (!pendingSave) return true
     const save = pendingSave
     pendingSave = null
+    inFlightSave = save
     saving.value = true
     saveError.value = null
     try {
@@ -58,6 +61,7 @@ export const useNotesStore = defineStore('notes', () => {
       saveError.value = 'Failed to save note. Is the backend running?'
       return false
     } finally {
+      inFlightSave = null
       saving.value = false
     }
   }
@@ -93,6 +97,36 @@ export const useNotesStore = defineStore('notes', () => {
     saveError.value = null
   }
 
+  /** True while an edit is waiting to be saved or its save is still in flight. */
+  function hasUnsavedChanges(): boolean {
+    return pendingSave !== null || saving.value
+  }
+
+  /**
+   * Fires the newest unsaved edit (pending, or else in flight) as a keepalive
+   * request so it can still reach the backend after the tab closes. The edit
+   * stays pending until that request succeeds, in case the user cancels
+   * leaving; saving it twice is harmless.
+   *
+   * Known gap: this request skips the save queue, so if an older save is still
+   * in flight it may reach the backend after this one and overwrite it. Closing
+   * that needs the backend to reject stale writes.
+   */
+  function saveOnUnload() {
+    const save = pendingSave ?? inFlightSave
+    if (!save) return
+    // Browsers reject keepalive bodies over 64 KB; the leave prompt still guards that edit.
+    upsertNote(save.date, save.content, { keepalive: true })
+      .then(() => {
+        // The user stayed and the edit is saved, unless a newer one replaced it meanwhile.
+        if (pendingSave === save) {
+          pendingSave = null
+          saveError.value = null
+        }
+      })
+      .catch(() => {})
+  }
+
   return {
     currentNote,
     loading,
@@ -103,5 +137,7 @@ export const useNotesStore = defineStore('notes', () => {
     updateContent,
     flushPendingSave,
     discardPendingSave,
+    hasUnsavedChanges,
+    saveOnUnload,
   }
 })
